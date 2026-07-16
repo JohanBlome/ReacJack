@@ -33,9 +33,13 @@ SOURCES := $(SRC_DIR)/reacjack.c $(CORE_SOURCES)
 OBJECTS := $(SOURCES:.c=.o)
 EXECUTABLE := reacjack
 PIPEWIRE_EXECUTABLE := reacjack-pw
-TEST_EXECUTABLE := tests/test_reac_decode
-TEST_OBJECTS := tests/test_reac_decode.o $(SRC_DIR)/reac_decode.o
+TEST_EXECUTABLES := tests/test_reac_decode tests/test_shared_audio
 PIPEWIRE_OBJECTS := $(SRC_DIR)/reacjack-pw.o $(SRC_DIR)/reac_decode.o
+
+TEST_LIBS := -lm
+ifeq ($(UNAME_S),Linux)
+  TEST_LIBS += -lrt
+endif
 
 .PHONY: all clean install install-pipewire test pipewire
 
@@ -44,11 +48,17 @@ all: $(EXECUTABLE)
 $(EXECUTABLE): $(OBJECTS)
 	$(CXX) $(OBJECTS) -o $@ $(LDLIBS) $(JACK_LIBS)
 
-test: $(TEST_EXECUTABLE)
-	./$(TEST_EXECUTABLE)
+test: $(TEST_EXECUTABLES)
+	./tests/test_reac_decode
+	./tests/test_shared_audio
 
-$(TEST_EXECUTABLE): $(TEST_OBJECTS)
-	$(CXX) $(TEST_OBJECTS) -o $@ -lm
+tests/test_reac_decode: tests/test_reac_decode.o $(SRC_DIR)/reac_decode.o
+	$(CXX) $^ -o $@ $(TEST_LIBS)
+
+tests/test_shared_audio: tests/test_shared_audio.o $(SRC_DIR)/shared_audio.o
+	$(CXX) $^ -o $@ $(TEST_LIBS)
+
+$(SRC_DIR)/shared_audio.o tests/test_shared_audio.o: $(SRC_DIR)/shared_audio.h
 
 ifneq ($(strip $(PIPEWIRE_LIBS)),)
 pipewire: $(PIPEWIRE_EXECUTABLE)
@@ -82,5 +92,5 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 clean:
-	rm -f $(OBJECTS) $(TEST_OBJECTS) $(PIPEWIRE_OBJECTS) $(EXECUTABLE) \
-		$(PIPEWIRE_EXECUTABLE) $(TEST_EXECUTABLE)
+	rm -f $(SRC_DIR)/*.o tests/*.o $(EXECUTABLE) $(PIPEWIRE_EXECUTABLE) \
+		$(TEST_EXECUTABLES)
