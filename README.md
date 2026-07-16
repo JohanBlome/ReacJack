@@ -52,9 +52,22 @@ sudo ./reacjackd -i en5          # channel count detected from the stream
 ```
 
 `reacjackd -tone -c 2` replaces capture with a synthetic 440 Hz signal, which
-is useful for testing readers without REAC hardware. The upcoming CoreAudio
-HAL plug-in will read this ring; until it exists, recording on macOS still
-goes through JACK as described above.
+is useful for testing readers without REAC hardware.
+
+macOS builds also produce `ReacJack.driver`, a CoreAudio HAL plug-in that
+publishes an input-only device named `ReacJack REAC` (40 channels, 48 kHz,
+float32). It currently records silence; connecting it to the `reacjackd` ring
+is the next milestone. To install it (briefly restarts `coreaudiod`, which
+interrupts system audio for a moment):
+
+```sh
+make install-driver
+# verify: the device appears in Audio MIDI Setup and records silence
+make uninstall-driver   # to remove it again
+```
+
+Until the plug-in carries real audio, recording on macOS still goes through
+JACK as described above.
 
 ### Linux
 

@@ -47,11 +47,48 @@ ifeq ($(UNAME_S),Linux)
 endif
 TEST_LIBS := -lm $(SHM_LIBS)
 
-.PHONY: all clean install install-pipewire test pipewire
+DRIVER_BUNDLE := ReacJack.driver
+DRIVER_BINARY := $(DRIVER_BUNDLE)/Contents/MacOS/ReacJack
+HAL_INSTALL_DIR := /Library/Audio/Plug-Ins/HAL
+
+.PHONY: all clean install install-pipewire test pipewire driver test-driver \
+	install-driver uninstall-driver
 
 all: $(EXECUTABLE) $(CTL_EXECUTABLE)
 ifeq ($(UNAME_S),Darwin)
-all: $(DAEMON_EXECUTABLE)
+all: $(DAEMON_EXECUTABLE) $(DRIVER_BUNDLE)
+endif
+
+ifeq ($(UNAME_S),Darwin)
+driver: $(DRIVER_BUNDLE)
+
+$(DRIVER_BUNDLE): $(DRIVER_BINARY) $(DRIVER_BUNDLE)/Contents/Info.plist
+	codesign --force --sign - $@
+	touch $@
+
+$(DRIVER_BINARY): $(SRC_DIR)/coreaudio/ReacJackDriver.c
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -bundle $< -o $@ \
+		-framework CoreAudio -framework CoreFoundation
+
+$(DRIVER_BUNDLE)/Contents/Info.plist: $(SRC_DIR)/coreaudio/Info.plist
+	mkdir -p $(@D)
+	cp $< $@
+
+test: test-driver
+test-driver: $(DRIVER_BUNDLE) tests/test_hal_driver
+	./tests/test_hal_driver
+
+tests/test_hal_driver: tests/test_hal_driver.o
+	$(CXX) $^ -o $@ -framework CoreAudio -framework CoreFoundation
+
+install-driver: $(DRIVER_BUNDLE)
+	sudo cp -R $(DRIVER_BUNDLE) $(HAL_INSTALL_DIR)/
+	sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
+
+uninstall-driver:
+	sudo rm -rf $(HAL_INSTALL_DIR)/$(DRIVER_BUNDLE)
+	sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
 endif
 
 $(DAEMON_EXECUTABLE): $(DAEMON_OBJECTS)
@@ -109,4 +146,6 @@ endif
 
 clean:
 	rm -f $(SRC_DIR)/*.o tests/*.o $(EXECUTABLE) $(PIPEWIRE_EXECUTABLE) \
-		$(DAEMON_EXECUTABLE) $(CTL_EXECUTABLE) $(TEST_EXECUTABLES)
+		$(DAEMON_EXECUTABLE) $(CTL_EXECUTABLE) $(TEST_EXECUTABLES) \
+		tests/test_hal_driver
+	rm -rf $(DRIVER_BUNDLE)

@@ -206,4 +206,11 @@ Tests/checks:
 - Milestone 3 is done for the capture/decode/ring path: `reacjackd` captures
   via libpcap (or generates a `-tone` test signal) into the shared ring, and
   `reacjackctl` reports ring health. Long-run soak testing is still pending.
-- Next: milestone 5, the silent CoreAudio HAL plug-in.
+- Milestone 5 is code-complete: `src/coreaudio/ReacJackDriver.c` builds into
+  `ReacJack.driver`, an input-only 40-channel 48 kHz float32 device that
+  records silence. `tests/test_hal_driver.c` loads the bundle the way
+  `coreaudiod` does (factory, QueryInterface) and exercises properties, IO
+  start/stop, zero timestamps, and silent ReadInput. Still pending: manual
+  verification under `coreaudiod` (`make install-driver`, then check Audio
+  MIDI Setup and record in QuickTime/Reaper).
+- Next: milestone 6, connecting the HAL plug-in to the reacjackd shared ring.

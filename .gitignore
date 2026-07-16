@@ -5,3 +5,5 @@ reacjackd
 reacjackctl
 tests/test_reac_decode
 tests/test_shared_audio
+tests/test_hal_driver
+ReacJack.driver/
