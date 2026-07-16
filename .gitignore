@@ -1,4 +1,7 @@
 *.o
 reacjack
 reacjack-pw
+reacjackd
+reacjackctl
 tests/test_reac_decode
+tests/test_shared_audio

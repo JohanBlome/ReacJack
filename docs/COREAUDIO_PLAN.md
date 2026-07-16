@@ -197,8 +197,13 @@ Tests/checks:
 - Clear error messages for missing capture permissions.
 - Clear status for no REAC packets, packet loss, and clock drift.
 
-## Current First Slice
+## Status
 
-Implement milestones 1 and 2 enough that the decoder is tested and the current
-JACK bridge consumes it. This gives the future macOS daemon and HAL plug-in a
-known-good decoding core.
+- Milestones 1, 2, and 3b are done: the decoder is tested, the JACK bridge and
+  the PipeWire client consume it.
+- Milestone 4 is done: `src/shared_audio.{h,c}` implements the shared memory
+  ring with tests in `tests/test_shared_audio.c`.
+- Milestone 3 is done for the capture/decode/ring path: `reacjackd` captures
+  via libpcap (or generates a `-tone` test signal) into the shared ring, and
+  `reacjackctl` reports ring health. Long-run soak testing is still pending.
+- Next: milestone 5, the silent CoreAudio HAL plug-in.

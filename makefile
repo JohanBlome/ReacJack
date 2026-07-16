@@ -33,17 +33,32 @@ SOURCES := $(SRC_DIR)/reacjack.c $(CORE_SOURCES)
 OBJECTS := $(SOURCES:.c=.o)
 EXECUTABLE := reacjack
 PIPEWIRE_EXECUTABLE := reacjack-pw
+DAEMON_EXECUTABLE := reacjackd
+CTL_EXECUTABLE := reacjackctl
 TEST_EXECUTABLES := tests/test_reac_decode tests/test_shared_audio
 PIPEWIRE_OBJECTS := $(SRC_DIR)/reacjack-pw.o $(SRC_DIR)/reac_decode.o
+DAEMON_OBJECTS := $(SRC_DIR)/reacjackd.o $(SRC_DIR)/reac_decode.o \
+	$(SRC_DIR)/shared_audio.o
+CTL_OBJECTS := $(SRC_DIR)/reacjackctl.o $(SRC_DIR)/shared_audio.o
 
-TEST_LIBS := -lm
+SHM_LIBS :=
 ifeq ($(UNAME_S),Linux)
-  TEST_LIBS += -lrt
+  SHM_LIBS += -lrt
 endif
+TEST_LIBS := -lm $(SHM_LIBS)
 
 .PHONY: all clean install install-pipewire test pipewire
 
-all: $(EXECUTABLE)
+all: $(EXECUTABLE) $(CTL_EXECUTABLE)
+ifeq ($(UNAME_S),Darwin)
+all: $(DAEMON_EXECUTABLE)
+endif
+
+$(DAEMON_EXECUTABLE): $(DAEMON_OBJECTS)
+	$(CXX) $^ -o $@ $(LDLIBS)
+
+$(CTL_EXECUTABLE): $(CTL_OBJECTS)
+	$(CXX) $^ -o $@ -lm $(SHM_LIBS)
 
 $(EXECUTABLE): $(OBJECTS)
 	$(CXX) $(OBJECTS) -o $@ $(LDLIBS) $(JACK_LIBS)
@@ -58,7 +73,8 @@ tests/test_reac_decode: tests/test_reac_decode.o $(SRC_DIR)/reac_decode.o
 tests/test_shared_audio: tests/test_shared_audio.o $(SRC_DIR)/shared_audio.o
 	$(CXX) $^ -o $@ $(TEST_LIBS)
 
-$(SRC_DIR)/shared_audio.o tests/test_shared_audio.o: $(SRC_DIR)/shared_audio.h
+$(SRC_DIR)/shared_audio.o tests/test_shared_audio.o $(SRC_DIR)/reacjackd.o \
+	$(SRC_DIR)/reacjackctl.o: $(SRC_DIR)/shared_audio.h
 
 ifneq ($(strip $(PIPEWIRE_LIBS)),)
 pipewire: $(PIPEWIRE_EXECUTABLE)
@@ -93,4 +109,4 @@ endif
 
 clean:
 	rm -f $(SRC_DIR)/*.o tests/*.o $(EXECUTABLE) $(PIPEWIRE_EXECUTABLE) \
-		$(TEST_EXECUTABLES)
+		$(DAEMON_EXECUTABLE) $(CTL_EXECUTABLE) $(TEST_EXECUTABLES)

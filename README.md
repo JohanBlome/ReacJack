@@ -41,6 +41,21 @@ root.
 sudo ./reacjack
 ```
 
+macOS builds also produce `reacjackd` and `reacjackctl`, the first pieces of
+the native CoreAudio path (see `docs/COREAUDIO_PLAN.md`). `reacjackd` captures
+and decodes REAC into a shared memory audio ring; `reacjackctl` prints the
+ring's format and health counters:
+
+```sh
+sudo ./reacjackd -i en5          # channel count detected from the stream
+./reacjackctl -w                 # watch ring fill and counters
+```
+
+`reacjackd -tone -c 2` replaces capture with a synthetic 440 Hz signal, which
+is useful for testing readers without REAC hardware. The upcoming CoreAudio
+HAL plug-in will read this ring; until it exists, recording on macOS still
+goes through JACK as described above.
+
 ### Linux
 
 Install JACK development headers, then build:
