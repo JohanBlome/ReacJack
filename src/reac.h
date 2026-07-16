@@ -3,13 +3,6 @@
 
 #include <stdint.h>
 
-const uint8_t REAC_ENDING[2] = { 0xc2, 0xea };
-const uint8_t  REAC_PROTOCOL[2] = { 0x88, 0x19 };
-typedef struct {
-    uint8_t ENDING[2];
-    uint8_t PROTOCOL[2];
-} REACConstants;
-
 /* REAC packet header */
 typedef struct {
     uint8_t counter[2];
@@ -25,7 +18,7 @@ typedef struct EthernetHeader
     uint16_t type; //16 bits
 }   ETHERHeader;
 
-const int MAX_INT32 = 1<<31;
-const int MAX_INT24 = 1<<23;
-const int MAX_INT16 = 1<<15;
+#define MAX_INT32 (1LL << 31)
+#define MAX_INT24 (1 << 23)
+#define MAX_INT16 (1 << 15)
 #endif // REAC_H_INCLUDED

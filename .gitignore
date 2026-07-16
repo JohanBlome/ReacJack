@@ -1,0 +1,4 @@
+*.o
+reacjack
+reacjack-pw
+tests/test_reac_decode
