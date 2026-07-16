@@ -207,10 +207,19 @@ Tests/checks:
   via libpcap (or generates a `-tone` test signal) into the shared ring, and
   `reacjackctl` reports ring health. Long-run soak testing is still pending.
 - Milestone 5 is code-complete: `src/coreaudio/ReacJackDriver.c` builds into
-  `ReacJack.driver`, an input-only 40-channel 48 kHz float32 device that
-  records silence. `tests/test_hal_driver.c` loads the bundle the way
-  `coreaudiod` does (factory, QueryInterface) and exercises properties, IO
-  start/stop, zero timestamps, and silent ReadInput. Still pending: manual
-  verification under `coreaudiod` (`make install-driver`, then check Audio
-  MIDI Setup and record in QuickTime/Reaper).
-- Next: milestone 6, connecting the HAL plug-in to the reacjackd shared ring.
+  `ReacJack.driver`, an input-only 40-channel 48 kHz float32 device.
+  `tests/test_hal_driver.c` loads the bundle the way `coreaudiod` does
+  (factory, QueryInterface) and exercises properties, IO start/stop, zero
+  timestamps, and ReadInput.
+- Milestone 6 is code-complete: StartIO opens the `/reacjack-audio` shared
+  ring (closed again on the last StopIO, so the IO path never maps memory),
+  and ReadInput interleaves ring audio into the device buffer; a missing
+  daemon, missing frames, and channels beyond the ring's all become silence.
+  Current limitation: the ring is only (re)opened on the first StartIO, so
+  after a daemon restart, recording must be stopped and started to reattach.
+- Still pending manual verification under `coreaudiod` (no REAC hardware
+  needed): `make install-driver`, check the device in Audio MIDI Setup,
+  record silence, then run `reacjackd -tone -c 2` and confirm the tone
+  records through the device in QuickTime/Reaper.
+- Next: milestone 7 (clock drift handling) once live behavior under
+  `coreaudiod` is confirmed, and milestone 8 (packaging).

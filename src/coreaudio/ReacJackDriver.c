@@ -17,6 +17,8 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach_time.h>
 
+#include "../shared_audio.h"
+
 enum {
   kObjectID_PlugIn = kAudioObjectPlugInObject,
   kObjectID_Device = 2,
@@ -27,6 +29,7 @@ enum {
 #define kDevice_Manufacturer "ReacJack"
 #define kDevice_UID "ReacJackDevice_UID"
 #define kDevice_ModelUID "ReacJackDevice_ModelUID"
+#define kDevice_RingName "/reacjack-audio"
 
 enum {
   kDevice_ChannelCount = 40,
@@ -43,6 +46,11 @@ static pthread_mutex_t gDevice_IOMutex = PTHREAD_MUTEX_INITIALIZER;
 static UInt64 gDevice_IOIsRunning = 0;
 static Float64 gDevice_HostTicksPerFrame = 0.0;
 static UInt64 gDevice_AnchorHostTime = 0;
+
+/* Opened on the first StartIO and closed on the last StopIO, so the IO path
+ * itself never maps or unmaps memory. Absent daemon means silence. */
+static SharedAudio gDevice_Ring;
+static Boolean gDevice_RingIsOpen = false;
 
 static AudioStreamBasicDescription device_stream_format(void)
 {
@@ -816,6 +824,7 @@ static OSStatus ReacJack_StartIO(AudioServerPlugInDriverRef inDriver,
   }
   if (gDevice_IOIsRunning == 0) {
     gDevice_AnchorHostTime = mach_absolute_time();
+    gDevice_RingIsOpen = shared_audio_open(&gDevice_Ring, kDevice_RingName) == 0;
   }
   gDevice_IOIsRunning++;
   pthread_mutex_unlock(&gDevice_IOMutex);
@@ -837,6 +846,10 @@ static OSStatus ReacJack_StopIO(AudioServerPlugInDriverRef inDriver,
     result = kAudioHardwareIllegalOperationError;
   } else {
     gDevice_IOIsRunning--;
+    if (gDevice_IOIsRunning == 0 && gDevice_RingIsOpen) {
+      shared_audio_close(&gDevice_Ring);
+      gDevice_RingIsOpen = false;
+    }
   }
   pthread_mutex_unlock(&gDevice_IOMutex);
   return result;
@@ -922,8 +935,14 @@ static OSStatus ReacJack_DoIOOperation(AudioServerPlugInDriverRef inDriver,
 
   if (inOperationID == kAudioServerPlugInIOOperationReadInput &&
       ioMainBuffer != NULL) {
-    /* Milestone 5 records silence; milestone 6 reads the shared ring here. */
-    memset(ioMainBuffer, 0, (size_t)inIOBufferFrameSize * kDevice_BytesPerFrame);
+    if (gDevice_RingIsOpen) {
+      /* Interleaves the ring's channels into the device buffer; missing
+       * frames and channels beyond the ring's become silence. */
+      shared_audio_read_interleaved(&gDevice_Ring, (float *)ioMainBuffer,
+                                    kDevice_ChannelCount, inIOBufferFrameSize);
+    } else {
+      memset(ioMainBuffer, 0, (size_t)inIOBufferFrameSize * kDevice_BytesPerFrame);
+    }
   }
 
   return 0;

@@ -64,6 +64,14 @@ int shared_audio_write(SharedAudio *audio, const float *const *channels, uint32_
  * Returns the number of real frames copied. Never blocks. */
 uint32_t shared_audio_read(SharedAudio *audio, float *const *channels, uint32_t frames);
 
+/* Like shared_audio_read, but interleaves into out (out_channels samples per
+ * frame). Ring channels beyond out_channels are skipped; output channels
+ * beyond the ring's become silence. */
+uint32_t shared_audio_read_interleaved(SharedAudio *audio,
+                                       float *out,
+                                       uint16_t out_channels,
+                                       uint32_t frames);
+
 #ifdef __cplusplus
 }
 #endif

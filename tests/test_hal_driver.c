@@ -10,6 +10,8 @@
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
 
+#include "../src/shared_audio.h"
+
 #define ASSERT_TRUE(expr)                                                        \
   do {                                                                          \
     if (!(expr)) {                                                              \
@@ -20,9 +22,16 @@
   } while (0)
 
 #define DRIVER_BINARY "ReacJack.driver/Contents/MacOS/ReacJack"
+#define DRIVER_RING_NAME "/reacjack-audio"
 #define EXPECTED_CHANNELS 40
 #define EXPECTED_SAMPLE_RATE 48000.0
 #define TEST_FRAMES 512
+#define RING_TEST_CHANNELS 2
+
+static float ring_sample(uint16_t channel, uint32_t frame)
+{
+  return (channel == 0 ? 1.0f : -1.0f) * (float)(frame + 1) / 1024.0f;
+}
 
 typedef void *(*DriverFactory)(CFAllocatorRef allocator, CFUUIDRef typeUUID);
 
@@ -130,7 +139,9 @@ int main(void)
   ASSERT_TRUE((*driver)->SetPropertyData(driver, device, 0, &address, 0, NULL,
                                          sizeof(bad_rate), &bad_rate) != 0);
 
-  /* IO: start, get monotonic zero timestamps, read silence, stop. */
+  /* IO: start, get monotonic zero timestamps, read silence, stop.
+   * No ring exists yet, so the device must record silence. */
+  shared_audio_unlink(DRIVER_RING_NAME);
   ASSERT_TRUE((*driver)->StartIO(driver, device, 0) == 0);
 
   Float64 sample_time = -1.0;
@@ -178,6 +189,51 @@ int main(void)
   }
 
   ASSERT_TRUE((*driver)->StopIO(driver, device, 0) == 0);
+
+  /* Milestone 6: when a reacjackd ring exists, ReadInput must deliver its
+   * audio in the first ring channels and silence in the rest. */
+  SharedAudio feeder;
+  ASSERT_TRUE(shared_audio_create(&feeder, DRIVER_RING_NAME, 48000,
+                                  RING_TEST_CHANNELS, 48000) == 0);
+
+  static float feed_ch1[TEST_FRAMES], feed_ch2[TEST_FRAMES];
+  float *feed_channels[RING_TEST_CHANNELS] = {feed_ch1, feed_ch2};
+  for (uint32_t i = 0; i < TEST_FRAMES; i++) {
+    feed_ch1[i] = ring_sample(0, i);
+    feed_ch2[i] = ring_sample(1, i);
+  }
+  ASSERT_TRUE(shared_audio_write(&feeder, (const float *const *)feed_channels,
+                                 TEST_FRAMES) == 0);
+
+  ASSERT_TRUE((*driver)->StartIO(driver, device, 0) == 0);
+
+  for (size_t i = 0; i < TEST_FRAMES * EXPECTED_CHANNELS; i++) {
+    buffer[i] = 1.0f;
+  }
+  ASSERT_TRUE((*driver)->DoIOOperation(driver, device, stream, 0,
+                                       kAudioServerPlugInIOOperationReadInput,
+                                       TEST_FRAMES, &cycle, buffer, NULL) == 0);
+
+  for (uint32_t frame = 0; frame < TEST_FRAMES; frame++) {
+    ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + 0] == ring_sample(0, frame));
+    ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + 1] == ring_sample(1, frame));
+    for (uint32_t ch = RING_TEST_CHANNELS; ch < EXPECTED_CHANNELS; ch++) {
+      ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + ch] == 0.0f);
+    }
+  }
+
+  /* A drained ring underruns to silence instead of failing. */
+  ASSERT_TRUE((*driver)->DoIOOperation(driver, device, stream, 0,
+                                       kAudioServerPlugInIOOperationReadInput,
+                                       TEST_FRAMES, &cycle, buffer, NULL) == 0);
+  for (size_t i = 0; i < TEST_FRAMES * EXPECTED_CHANNELS; i++) {
+    ASSERT_TRUE(buffer[i] == 0.0f);
+  }
+  ASSERT_TRUE(feeder.header->underruns > 0);
+
+  ASSERT_TRUE((*driver)->StopIO(driver, device, 0) == 0);
+  shared_audio_close(&feeder);
+  shared_audio_unlink(DRIVER_RING_NAME);
 
   puts("hal driver tests passed");
   return 0;

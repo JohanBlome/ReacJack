@@ -183,6 +183,36 @@ int shared_audio_write(SharedAudio *audio, const float *const *channels, uint32_
   return 0;
 }
 
+uint32_t shared_audio_read_interleaved(SharedAudio *audio,
+                                       float *out,
+                                       uint16_t out_channels,
+                                       uint32_t frames)
+{
+  SharedAudioHeader *header = audio->header;
+  uint64_t read_pos = load_pos(&header->read_pos);
+  uint64_t available = load_pos(&header->write_pos) - read_pos;
+  uint32_t to_read = available < frames ? (uint32_t)available : frames;
+  uint32_t capacity = header->capacity_frames;
+  uint32_t copy_channels =
+      header->channels < out_channels ? (uint32_t)header->channels : out_channels;
+
+  memset(out, 0, (size_t)frames * out_channels * sizeof(float));
+  for (uint32_t ch = 0; ch < copy_channels; ch++) {
+    const float *base = audio->samples + (size_t)ch * capacity;
+    for (uint32_t frame = 0; frame < to_read; frame++) {
+      out[(size_t)frame * out_channels + ch] =
+          base[(uint32_t)((read_pos + frame) % capacity)];
+    }
+  }
+
+  if (to_read < frames) {
+    header->underruns++;
+  }
+
+  store_pos(&header->read_pos, read_pos + to_read);
+  return to_read;
+}
+
 uint32_t shared_audio_read(SharedAudio *audio, float *const *channels, uint32_t frames)
 {
   SharedAudioHeader *header = audio->header;

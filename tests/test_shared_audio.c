@@ -203,6 +203,80 @@ static void test_overrun_drops_whole_write(void)
   shared_audio_unlink(TEST_RING_NAME);
 }
 
+static void test_interleaved_read(void)
+{
+  SharedAudio writer;
+  SharedAudio reader;
+  float write_ch1[12], write_ch2[12];
+  float interleaved[12 * 2];
+  float *write_channels[2] = {write_ch1, write_ch2};
+
+  shared_audio_unlink(TEST_RING_NAME);
+  ASSERT_TRUE(shared_audio_create(&writer, TEST_RING_NAME, 48000, 2, 16) == 0);
+  ASSERT_TRUE(shared_audio_open(&reader, TEST_RING_NAME) == 0);
+
+  fill_channels(write_channels, 2, 12, 0);
+  ASSERT_TRUE(shared_audio_write(&writer, (const float *const *)write_channels, 12) == 0);
+  ASSERT_TRUE(shared_audio_read_interleaved(&reader, interleaved, 2, 12) == 12);
+  for (uint32_t frame = 0; frame < 12; frame++) {
+    ASSERT_TRUE(interleaved[frame * 2 + 0] == sample_value(0, frame));
+    ASSERT_TRUE(interleaved[frame * 2 + 1] == sample_value(1, frame));
+  }
+
+  /* Positions are at 12 of 16: the next read must wrap correctly. */
+  fill_channels(write_channels, 2, 12, 12);
+  ASSERT_TRUE(shared_audio_write(&writer, (const float *const *)write_channels, 12) == 0);
+  ASSERT_TRUE(shared_audio_read_interleaved(&reader, interleaved, 2, 12) == 12);
+  for (uint32_t frame = 0; frame < 12; frame++) {
+    ASSERT_TRUE(interleaved[frame * 2 + 0] == sample_value(0, 12 + frame));
+    ASSERT_TRUE(interleaved[frame * 2 + 1] == sample_value(1, 12 + frame));
+  }
+
+  shared_audio_close(&reader);
+  shared_audio_close(&writer);
+  shared_audio_unlink(TEST_RING_NAME);
+}
+
+static void test_interleaved_read_pads_wide_output_and_underrun(void)
+{
+  SharedAudio writer;
+  SharedAudio reader;
+  float write_ch1[5], write_ch2[5];
+  float interleaved[8 * 4];
+  float *write_channels[2] = {write_ch1, write_ch2};
+
+  shared_audio_unlink(TEST_RING_NAME);
+  ASSERT_TRUE(shared_audio_create(&writer, TEST_RING_NAME, 48000, 2, 480) == 0);
+  ASSERT_TRUE(shared_audio_open(&reader, TEST_RING_NAME) == 0);
+
+  fill_channels(write_channels, 2, 5, 0);
+  ASSERT_TRUE(shared_audio_write(&writer, (const float *const *)write_channels, 5) == 0);
+
+  for (size_t i = 0; i < 8 * 4; i++) {
+    interleaved[i] = 1.0f;
+  }
+
+  /* A 4-channel reader of a 2-channel ring: channels 2-3 must be silent,
+   * and the 3 missing frames must be silent in every channel. */
+  ASSERT_TRUE(shared_audio_read_interleaved(&reader, interleaved, 4, 8) == 5);
+  for (uint32_t frame = 0; frame < 5; frame++) {
+    ASSERT_TRUE(interleaved[frame * 4 + 0] == sample_value(0, frame));
+    ASSERT_TRUE(interleaved[frame * 4 + 1] == sample_value(1, frame));
+    ASSERT_TRUE(interleaved[frame * 4 + 2] == 0.0f);
+    ASSERT_TRUE(interleaved[frame * 4 + 3] == 0.0f);
+  }
+  for (uint32_t frame = 5; frame < 8; frame++) {
+    for (uint32_t ch = 0; ch < 4; ch++) {
+      ASSERT_TRUE(interleaved[frame * 4 + ch] == 0.0f);
+    }
+  }
+  ASSERT_TRUE(reader.header->underruns == 1);
+
+  shared_audio_close(&reader);
+  shared_audio_close(&writer);
+  shared_audio_unlink(TEST_RING_NAME);
+}
+
 static void test_rejects_header_mismatch(void)
 {
   SharedAudio writer;
@@ -237,6 +311,8 @@ int main(void)
   test_wraparound_write_read();
   test_underrun_reads_silence();
   test_overrun_drops_whole_write();
+  test_interleaved_read();
+  test_interleaved_read_pads_wide_output_and_underrun();
   test_rejects_header_mismatch();
 
   puts("shared_audio tests passed");

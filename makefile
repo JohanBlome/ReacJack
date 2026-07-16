@@ -66,9 +66,11 @@ $(DRIVER_BUNDLE): $(DRIVER_BINARY) $(DRIVER_BUNDLE)/Contents/Info.plist
 	codesign --force --sign - $@
 	touch $@
 
-$(DRIVER_BINARY): $(SRC_DIR)/coreaudio/ReacJackDriver.c
+$(DRIVER_BINARY): $(SRC_DIR)/coreaudio/ReacJackDriver.c $(SRC_DIR)/shared_audio.c \
+		$(SRC_DIR)/shared_audio.h
 	mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -bundle $< -o $@ \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -bundle \
+		$(SRC_DIR)/coreaudio/ReacJackDriver.c $(SRC_DIR)/shared_audio.c -o $@ \
 		-framework CoreAudio -framework CoreFoundation
 
 $(DRIVER_BUNDLE)/Contents/Info.plist: $(SRC_DIR)/coreaudio/Info.plist
@@ -79,8 +81,10 @@ test: test-driver
 test-driver: $(DRIVER_BUNDLE) tests/test_hal_driver
 	./tests/test_hal_driver
 
-tests/test_hal_driver: tests/test_hal_driver.o
+tests/test_hal_driver: tests/test_hal_driver.o $(SRC_DIR)/shared_audio.o
 	$(CXX) $^ -o $@ -framework CoreAudio -framework CoreFoundation
+
+tests/test_hal_driver.o: $(SRC_DIR)/shared_audio.h
 
 install-driver: $(DRIVER_BUNDLE)
 	sudo cp -R $(DRIVER_BUNDLE) $(HAL_INSTALL_DIR)/

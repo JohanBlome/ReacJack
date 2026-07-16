@@ -56,18 +56,19 @@ is useful for testing readers without REAC hardware.
 
 macOS builds also produce `ReacJack.driver`, a CoreAudio HAL plug-in that
 publishes an input-only device named `ReacJack REAC` (40 channels, 48 kHz,
-float32). It currently records silence; connecting it to the `reacjackd` ring
-is the next milestone. To install it (briefly restarts `coreaudiod`, which
-interrupts system audio for a moment):
+float32). While `reacjackd` is running, the device carries the ring's audio;
+without the daemon it records silence. To install it (briefly restarts
+`coreaudiod`, which interrupts system audio for a moment):
 
 ```sh
 make install-driver
-# verify: the device appears in Audio MIDI Setup and records silence
-make uninstall-driver   # to remove it again
+# verify: the device appears in Audio MIDI Setup
+./reacjackd -tone -c 2   # then record the device in QuickTime/Reaper
+make uninstall-driver    # to remove it again
 ```
 
-Until the plug-in carries real audio, recording on macOS still goes through
-JACK as described above.
+If `reacjackd` is restarted, stop and restart recording so the device
+reattaches to the new ring.
 
 ### Linux
 
