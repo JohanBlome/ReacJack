@@ -205,7 +205,10 @@ Tests/checks:
   ring with tests in `tests/test_shared_audio.c`.
 - Milestone 3 is done for the capture/decode/ring path: `reacjackd` captures
   via libpcap (or generates a `-tone` test signal) into the shared ring, and
-  `reacjackctl` reports ring health. Long-run soak testing is still pending.
+  `reacjackctl` reports ring health. An 8-minute synthetic soak (1.9M
+  packets, no reader) held RSS and file descriptors flat with deterministic
+  overrun accounting; a multi-hour soak is still worth running before real
+  sessions.
 - Milestone 5 is code-complete: `src/coreaudio/ReacJackDriver.c` builds into
   `ReacJack.driver`, an input-only 40-channel 48 kHz float32 device.
   `tests/test_hal_driver.c` loads the bundle the way `coreaudiod` does
