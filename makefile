@@ -9,6 +9,7 @@ CFLAGS ?= -Wall -Wextra -O2 -std=gnu11
 CXXFLAGS ?= -Wall -Wextra -O2 -std=c++11
 LDLIBS ?= -lpthread -lm
 
+HAVE_JACK := $(shell $(PKG_CONFIG) --exists jack 2>/dev/null && echo yes)
 JACK_CFLAGS := $(shell $(PKG_CONFIG) --cflags jack 2>/dev/null)
 JACK_LIBS := $(shell $(PKG_CONFIG) --libs jack 2>/dev/null)
 PIPEWIRE_CFLAGS := $(shell $(PKG_CONFIG) --cflags libpipewire-0.3 2>/dev/null)
@@ -52,9 +53,18 @@ DRIVER_BINARY := $(DRIVER_BUNDLE)/Contents/MacOS/ReacJack
 HAL_INSTALL_DIR := /Library/Audio/Plug-Ins/HAL
 
 .PHONY: all clean install install-pipewire test pipewire driver test-driver \
-	install-driver uninstall-driver
+	install-driver uninstall-driver jack-notice
 
-all: $(EXECUTABLE) $(CTL_EXECUTABLE)
+all: $(CTL_EXECUTABLE)
+ifeq ($(HAVE_JACK),yes)
+all: $(EXECUTABLE)
+else
+all: jack-notice
+jack-notice:
+	@echo "JACK development files not found: skipping the reacjack JACK bridge."
+	@echo "The native tools still build. To build reacjack, install JACK"
+	@echo "(macOS: brew install jack; Debian/Ubuntu: libjack-jackd2-dev)."
+endif
 ifeq ($(UNAME_S),Darwin)
 all: $(DAEMON_EXECUTABLE) $(DRIVER_BUNDLE)
 endif
