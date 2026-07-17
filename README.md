@@ -25,17 +25,23 @@ make          # reacjackd, reacjackctl, ReacJack.driver (+ reacjack if JACK is i
 make test     # decoder, shared ring, and HAL driver test suites
 ```
 
-Install the CoreAudio device (briefly restarts `coreaudiod`, which
+Install the full stack — binaries to `/usr/local/bin`, the CoreAudio device
+to `/Library/Audio/Plug-Ins/HAL` (briefly restarts `coreaudiod`, which
 interrupts system audio for a moment):
 
 ```sh
-make install-driver
-# verify: "ReacJack REAC" appears in Audio MIDI Setup
-make uninstall-driver   # to remove it again
+make install-macos             # manual capture: run reacjackd yourself
+make install-macos IFACE=en5   # also installs a launchd daemon that
+                               # captures from en5 at boot and logs to
+                               # /var/log/reacjackd.log
+make uninstall-macos           # removes daemon, binaries, and driver
 ```
 
-Then start the daemon and record the device in any CoreAudio app
-(QuickTime, Reaper, Logic, ...):
+(`make install-driver` / `make uninstall-driver` still exist for iterating
+on the HAL plug-in alone.)
+
+Then start the daemon (unless launchd already did) and record the device in
+any CoreAudio app (QuickTime, Reaper, Logic, ...):
 
 ```sh
 sudo ./reacjackd -i en5   # channel count detected from the REAC stream

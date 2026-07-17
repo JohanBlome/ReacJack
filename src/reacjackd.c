@@ -35,6 +35,7 @@ typedef struct {
   uint64_t non_reac_packets;
   uint64_t malformed_packets;
   uint64_t capture_errors;
+  uint64_t status_last_received;
   uint16_t last_counter;
   int have_last_counter;
 } ReacDaemon;
@@ -80,7 +81,7 @@ static int ensure_ring(ReacDaemon *daemon, uint16_t channels)
   return 0;
 }
 
-static void print_status(const ReacDaemon *daemon)
+static void print_status(ReacDaemon *daemon)
 {
   uint32_t fill = daemon->ring_created ? shared_audio_readable_frames(&daemon->ring) : 0;
   uint64_t overruns = daemon->ring_created ? daemon->ring.header->overruns : 0;
@@ -98,6 +99,19 @@ static void print_status(const ReacDaemon *daemon)
           (unsigned long long)daemon->capture_errors, fill,
           (unsigned long long)overruns, (unsigned long long)underruns,
           (unsigned long long)inserted, (unsigned long long)dropped);
+
+  if (!daemon->tone_mode && daemon->pcap != NULL) {
+    if (daemon->received_packets == 0) {
+      fprintf(stderr,
+              "No REAC packets on %s yet. Check the cable and that the REAC "
+              "device is powered on.\n",
+              daemon->interface);
+    } else if (daemon->received_packets == daemon->status_last_received) {
+      fprintf(stderr,
+              "REAC stream stalled: no packets since the last status line.\n");
+    }
+  }
+  daemon->status_last_received = daemon->received_packets;
 }
 
 static int capture_open(ReacDaemon *daemon)
@@ -116,9 +130,16 @@ static int capture_open(ReacDaemon *daemon)
   pcap_set_timeout(daemon->pcap, 100);
   pcap_set_immediate_mode(daemon->pcap, 1);
 
-  if (pcap_activate(daemon->pcap) < 0) {
+  int activate_result = pcap_activate(daemon->pcap);
+  if (activate_result < 0) {
     fprintf(stderr, "pcap_activate(%s): %s\n", daemon->interface,
             pcap_geterr(daemon->pcap));
+    if (activate_result == PCAP_ERROR_PERM_DENIED || geteuid() != 0) {
+      fprintf(stderr,
+              "Capture permission denied. Run reacjackd with sudo, or grant "
+              "BPF device access (for example via Wireshark's ChmodBPF "
+              "helper).\n");
+    }
     return -1;
   }
   if (pcap_datalink(daemon->pcap) != DLT_EN10MB) {

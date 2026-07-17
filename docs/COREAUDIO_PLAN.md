@@ -242,9 +242,18 @@ Tests/checks:
   ring's insert/drop regulation degrades to a safety net for packet loss.
   The HAL harness verifies the device clock follows a published 500 ppm
   skew; `reacjackctl` shows the latest observation.
+- Milestone 8 is code-complete: `scripts/install-macos.sh` and
+  `scripts/uninstall-macos.sh` (wrapped by `make install-macos IFACE=en5` /
+  `make uninstall-macos`) install the binaries, the HAL plug-in, and an
+  optional launchd daemon for capture at boot. Verified in a sandbox
+  (path-override env vars): fresh install lays down every artifact, the
+  launchd plist lints, and uninstall leaves nothing behind. `reacjackd` now
+  prints an actionable hint on capture permission errors and reports
+  "no REAC packets yet" / "stream stalled" conditions in its status output.
 - Still pending manual verification under `coreaudiod` (no REAC hardware
-  needed): `make install-driver`, check the device in Audio MIDI Setup,
+  needed): `make install-macos`, check the device in Audio MIDI Setup,
   record silence, then run `reacjackd -tone -c 2` and confirm the tone
   records through the device in QuickTime/Reaper. A multi-hour recording
   soak should confirm drift corrections stay rare and inaudible.
-- Next: milestone 8 (packaging) and live REAC hardware validation.
+- Next: live REAC hardware validation, then the remaining refinements
+  (mid-IO ring reattach after daemon restart, zero-crossing drops).

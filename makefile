@@ -53,7 +53,7 @@ DRIVER_BINARY := $(DRIVER_BUNDLE)/Contents/MacOS/ReacJack
 HAL_INSTALL_DIR := /Library/Audio/Plug-Ins/HAL
 
 .PHONY: all clean install install-pipewire test pipewire driver test-driver \
-	install-driver uninstall-driver jack-notice
+	install-driver uninstall-driver install-macos uninstall-macos jack-notice
 
 all: $(CTL_EXECUTABLE)
 ifeq ($(HAVE_JACK),yes)
@@ -103,6 +103,13 @@ install-driver: $(DRIVER_BUNDLE)
 uninstall-driver:
 	sudo rm -rf $(HAL_INSTALL_DIR)/$(DRIVER_BUNDLE)
 	sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
+
+# Full stack install; pass IFACE=en5 to also install the launchd daemon.
+install-macos: all
+	sudo scripts/install-macos.sh $(if $(IFACE),-i $(IFACE))
+
+uninstall-macos:
+	sudo scripts/uninstall-macos.sh
 endif
 
 $(DAEMON_EXECUTABLE): $(DAEMON_OBJECTS)
