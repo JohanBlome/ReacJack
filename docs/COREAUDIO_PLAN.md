@@ -232,6 +232,16 @@ Tests/checks:
   with zero overruns/underruns. Dropping at zero-ish crossings and the
   drift-aware resampler remain future refinements; real drift is a few ppm,
   far below the correction capacity.
+- Milestone 7's "later policy" went further than planned: the correction now
+  lives in the playout path instead of the audio. The daemon publishes
+  (host time, sample position) clock observations through a seqlock in the
+  ring header (ABI 3), and the HAL device slaves its `GetZeroTimeStamp`
+  timeline to the observed REAC rate (clamped to +/- 1%, rebased
+  continuously so timestamps stay monotonic, seed bumped on rate changes so
+  clients resync). CoreAudio then rate-matches the device itself, and the
+  ring's insert/drop regulation degrades to a safety net for packet loss.
+  The HAL harness verifies the device clock follows a published 500 ppm
+  skew; `reacjackctl` shows the latest observation.
 - Still pending manual verification under `coreaudiod` (no REAC hardware
   needed): `make install-driver`, check the device in Audio MIDI Setup,
   record silence, then run `reacjackd -tone -c 2` and confirm the tone

@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 #define SHARED_AUDIO_MAGIC 0x524a5341u /* "RJSA" */
-#define SHARED_AUDIO_ABI_VERSION 2u
+#define SHARED_AUDIO_ABI_VERSION 3u
 #define SHARED_AUDIO_NAME_MAX 32
 
 /* Largest drift correction (frames inserted or dropped) per regulated read. */
@@ -39,6 +39,12 @@ typedef struct {
   uint64_t resets;
   uint64_t inserted_frames; /* drift corrections: duplicated frames */
   uint64_t dropped_frames;  /* drift corrections: skipped frames */
+  /* Writer clock observations (seqlock: clock_seq is even when stable).
+   * Readers derive the writer's true sample rate from these to slave their
+   * own clock instead of correcting audio. */
+  uint64_t clock_seq;
+  uint64_t clock_host_time;
+  uint64_t clock_sample_pos;
 } SharedAudioHeader;
 
 typedef struct {
@@ -94,6 +100,22 @@ uint32_t shared_audio_read_interleaved_regulated(SharedAudio *audio,
                                                  uint32_t frames,
                                                  uint32_t target_fill,
                                                  uint32_t tolerance);
+
+/* Monotonic host clock in platform ticks: mach_absolute_time on macOS,
+ * CLOCK_MONOTONIC nanoseconds elsewhere. Writer and readers share a host,
+ * so the unit only needs to agree per platform. */
+uint64_t shared_audio_host_time(void);
+
+/* Writer: publish "sample_pos was written at host_time". Wait-free. */
+void shared_audio_publish_clock(SharedAudio *audio,
+                                uint64_t host_time,
+                                uint64_t sample_pos);
+
+/* Reader: fetch the latest observation. Returns nonzero if the writer has
+ * never published (or the seqlock stayed contended). Never blocks. */
+int shared_audio_get_clock(const SharedAudio *audio,
+                           uint64_t *host_time,
+                           uint64_t *sample_pos);
 
 #ifdef __cplusplus
 }

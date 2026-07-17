@@ -6,7 +6,12 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#include <mach/mach_time.h>
+#endif
 
 enum { SHARED_AUDIO_SAMPLES_ALIGN = 64 };
 
@@ -270,6 +275,57 @@ uint32_t shared_audio_read_interleaved_regulated(SharedAudio *audio,
   }
 
   return shared_audio_read_interleaved(audio, out, out_channels, frames);
+}
+
+uint64_t shared_audio_host_time(void)
+{
+#if defined(__APPLE__)
+  return mach_absolute_time();
+#else
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+#endif
+}
+
+void shared_audio_publish_clock(SharedAudio *audio,
+                                uint64_t host_time,
+                                uint64_t sample_pos)
+{
+  SharedAudioHeader *header = audio->header;
+  uint64_t seq = __atomic_load_n(&header->clock_seq, __ATOMIC_RELAXED);
+
+  __atomic_store_n(&header->clock_seq, seq + 1, __ATOMIC_RELEASE); /* odd: updating */
+  __atomic_store_n(&header->clock_host_time, host_time, __ATOMIC_RELEASE);
+  __atomic_store_n(&header->clock_sample_pos, sample_pos, __ATOMIC_RELEASE);
+  __atomic_store_n(&header->clock_seq, seq + 2, __ATOMIC_RELEASE); /* even: stable */
+}
+
+int shared_audio_get_clock(const SharedAudio *audio,
+                           uint64_t *host_time,
+                           uint64_t *sample_pos)
+{
+  const SharedAudioHeader *header = audio->header;
+
+  for (int attempt = 0; attempt < 16; attempt++) {
+    uint64_t seq = __atomic_load_n(&header->clock_seq, __ATOMIC_ACQUIRE);
+    if (seq == 0) {
+      return -1; /* never published */
+    }
+    if (seq & 1) {
+      continue; /* mid-update */
+    }
+
+    uint64_t observed_time = __atomic_load_n(&header->clock_host_time, __ATOMIC_ACQUIRE);
+    uint64_t observed_pos = __atomic_load_n(&header->clock_sample_pos, __ATOMIC_ACQUIRE);
+    if (__atomic_load_n(&header->clock_seq, __ATOMIC_ACQUIRE) == seq) {
+      *host_time = observed_time;
+      *sample_pos = observed_pos;
+      return 0;
+    }
+  }
+
+  return -1;
 }
 
 uint32_t shared_audio_read(SharedAudio *audio, float *const *channels, uint32_t frames)

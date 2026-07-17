@@ -3,9 +3,12 @@
 #endif
 
 #include <dlfcn.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <mach/mach_time.h>
 
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -232,6 +235,44 @@ int main(void)
       ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + ch] == 0.0f);
     }
   }
+
+  /* Clock slaving: once the daemon publishes observations showing its true
+   * rate, the device's zero timestamps must advance at that rate rather
+   * than the nominal host-clock rate. */
+  struct mach_timebase_info timebase;
+  mach_timebase_info(&timebase);
+  Float64 ticks_per_second = 1000000000.0 * timebase.denom / timebase.numer;
+  Float64 nominal_ticks_per_frame = ticks_per_second / EXPECTED_SAMPLE_RATE;
+  Float64 skewed_ticks_per_frame = nominal_ticks_per_frame * 1.0005; /* 500 ppm slow */
+
+  uint64_t observation_time = shared_audio_host_time();
+  shared_audio_publish_clock(&feeder, observation_time, 0);
+  /* First call captures the reference observation... */
+  ASSERT_TRUE((*driver)->GetZeroTimeStamp(driver, device, 0, &sample_time, &host_time,
+                                          &seed) == 0);
+  /* ...then a second observation 48000 frames later at the skewed rate. */
+  shared_audio_publish_clock(
+      &feeder, observation_time + (uint64_t)(skewed_ticks_per_frame * 48000.0), 48000);
+  ASSERT_TRUE((*driver)->GetZeroTimeStamp(driver, device, 0, &sample_time, &host_time,
+                                          &seed) == 0);
+
+  Float64 slaved_sample_a = 0.0;
+  UInt64 slaved_host_a = 0;
+  ASSERT_TRUE((*driver)->GetZeroTimeStamp(driver, device, 0, &slaved_sample_a,
+                                          &slaved_host_a, &seed) == 0);
+  usleep(250000); /* cross at least one 8192-frame period */
+  Float64 slaved_sample_b = 0.0;
+  UInt64 slaved_host_b = 0;
+  ASSERT_TRUE((*driver)->GetZeroTimeStamp(driver, device, 0, &slaved_sample_b,
+                                          &slaved_host_b, &seed) == 0);
+  ASSERT_TRUE(slaved_sample_b > slaved_sample_a);
+  ASSERT_TRUE(slaved_host_b > slaved_host_a);
+
+  Float64 measured_ticks_per_frame =
+      (Float64)(slaved_host_b - slaved_host_a) / (slaved_sample_b - slaved_sample_a);
+  ASSERT_TRUE(fabs(measured_ticks_per_frame - skewed_ticks_per_frame) /
+                  skewed_ticks_per_frame <
+              0.0001);
 
   /* Draining takes the fill below target: insert corrections must engage. */
   int drain_reads = 0;

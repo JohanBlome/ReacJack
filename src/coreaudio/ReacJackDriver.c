@@ -9,6 +9,7 @@
  * on the IO path (GetZeroTimeStamp and DoIOOperation).
  */
 
+#include <math.h>
 #include <pthread.h>
 #include <string.h>
 
@@ -38,8 +39,15 @@ enum {
   /* Drift regulation: hover 100 ms behind the daemon, correcting only when
    * the fill leaves a +/- 50 ms band (see shared_audio_read_interleaved_regulated). */
   kDevice_TargetFill = 4800,
-  kDevice_FillTolerance = 2400
+  kDevice_FillTolerance = 2400,
+  /* Clock slaving: frames of daemon observations required before trusting a
+   * rate estimate (0.5 s; the estimate then sharpens as the window grows). */
+  kClock_MinObservedFrames = 24000
 };
+
+/* The daemon's clock may legitimately differ from nominal by ppm; anything
+ * past this is a broken observation, not drift. */
+static const Float64 kClock_MaxRateSkew = 0.01;
 static const Float64 kDevice_SampleRate = 48000.0;
 
 static pthread_mutex_t gPlugIn_StateMutex = PTHREAD_MUTEX_INITIALIZER;
@@ -48,8 +56,19 @@ static AudioServerPlugInHostRef gPlugIn_Host = NULL;
 
 static pthread_mutex_t gDevice_IOMutex = PTHREAD_MUTEX_INITIALIZER;
 static UInt64 gDevice_IOIsRunning = 0;
-static Float64 gDevice_HostTicksPerFrame = 0.0;
+static Float64 gDevice_HostTicksPerFrame = 0.0; /* nominal, from Initialize */
 static UInt64 gDevice_AnchorHostTime = 0;
+static Float64 gDevice_AnchorSampleTime = 0.0;
+static UInt64 gDevice_LastHostTime = 0;
+static Float64 gDevice_LastSampleTime = 0.0;
+static UInt64 gDevice_TimelineSeed = 1;
+
+/* Clock slaving state: the device clock follows the daemon's observed rate
+ * so CoreAudio rate-matches instead of the ring correcting audio. */
+static Float64 gDevice_SlavedTicksPerFrame = 0.0;
+static Boolean gDevice_ClockRefValid = false;
+static UInt64 gDevice_ClockRefHostTime = 0;
+static UInt64 gDevice_ClockRefSamplePos = 0;
 
 /* Opened on the first StartIO and closed on the last StopIO, so the IO path
  * itself never maps or unmaps memory. Absent daemon means silence. */
@@ -828,6 +847,11 @@ static OSStatus ReacJack_StartIO(AudioServerPlugInDriverRef inDriver,
   }
   if (gDevice_IOIsRunning == 0) {
     gDevice_AnchorHostTime = mach_absolute_time();
+    gDevice_AnchorSampleTime = 0.0;
+    gDevice_LastHostTime = gDevice_AnchorHostTime;
+    gDevice_LastSampleTime = 0.0;
+    gDevice_SlavedTicksPerFrame = gDevice_HostTicksPerFrame;
+    gDevice_ClockRefValid = false;
     gDevice_RingIsOpen = shared_audio_open(&gDevice_Ring, kDevice_RingName) == 0;
     if (gDevice_RingIsOpen) {
       shared_audio_seek_to_fill(&gDevice_Ring, kDevice_TargetFill);
@@ -862,6 +886,57 @@ static OSStatus ReacJack_StopIO(AudioServerPlugInDriverRef inDriver,
   return result;
 }
 
+/* Called with gDevice_IOMutex held. Refines the slaved rate from the
+ * daemon's published (host time, sample position) observations. The window
+ * from the reference to the latest observation keeps growing, so the
+ * estimate converges; a rate change rebases the timeline at the last
+ * emitted timestamp to stay continuous and monotonic. */
+static void update_clock_estimate(void)
+{
+  if (!gDevice_RingIsOpen) {
+    return;
+  }
+
+  UInt64 observed_time = 0;
+  UInt64 observed_pos = 0;
+  if (shared_audio_get_clock(&gDevice_Ring, &observed_time, &observed_pos) != 0) {
+    return;
+  }
+
+  if (!gDevice_ClockRefValid || observed_pos < gDevice_ClockRefSamplePos) {
+    /* First observation, or the daemon restarted its position counter. */
+    gDevice_ClockRefHostTime = observed_time;
+    gDevice_ClockRefSamplePos = observed_pos;
+    gDevice_ClockRefValid = true;
+    return;
+  }
+
+  UInt64 window_frames = observed_pos - gDevice_ClockRefSamplePos;
+  if (window_frames < kClock_MinObservedFrames) {
+    return;
+  }
+
+  Float64 estimate = (Float64)(observed_time - gDevice_ClockRefHostTime) /
+                     (Float64)window_frames;
+  Float64 low = gDevice_HostTicksPerFrame * (1.0 - kClock_MaxRateSkew);
+  Float64 high = gDevice_HostTicksPerFrame * (1.0 + kClock_MaxRateSkew);
+  if (estimate < low) {
+    estimate = low;
+  } else if (estimate > high) {
+    estimate = high;
+  }
+
+  if (fabs(estimate - gDevice_SlavedTicksPerFrame) <=
+      gDevice_SlavedTicksPerFrame * 0.000002) {
+    return; /* below 2 ppm: not worth resyncing clients */
+  }
+
+  gDevice_AnchorHostTime = gDevice_LastHostTime;
+  gDevice_AnchorSampleTime = gDevice_LastSampleTime;
+  gDevice_SlavedTicksPerFrame = estimate;
+  gDevice_TimelineSeed++;
+}
+
 static OSStatus ReacJack_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver,
                                           AudioObjectID inDeviceObjectID,
                                           UInt32 inClientID,
@@ -876,13 +951,27 @@ static OSStatus ReacJack_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver,
   }
 
   pthread_mutex_lock(&gDevice_IOMutex);
+  update_clock_estimate();
+
   UInt64 current_host_time = mach_absolute_time();
-  Float64 ticks_per_period = gDevice_HostTicksPerFrame * (Float64)kDevice_RingFrames;
+  Float64 ticks_per_period = gDevice_SlavedTicksPerFrame * (Float64)kDevice_RingFrames;
   UInt64 elapsed_ticks = current_host_time - gDevice_AnchorHostTime;
   UInt64 periods = (UInt64)((Float64)elapsed_ticks / ticks_per_period);
-  *outSampleTime = (Float64)(periods * kDevice_RingFrames);
-  *outHostTime = gDevice_AnchorHostTime + (UInt64)((Float64)periods * ticks_per_period);
-  *outSeed = 1;
+  Float64 sample_time =
+      gDevice_AnchorSampleTime + (Float64)(periods * kDevice_RingFrames);
+  UInt64 host_time =
+      gDevice_AnchorHostTime + (UInt64)((Float64)periods * ticks_per_period);
+
+  if (host_time < gDevice_LastHostTime) {
+    host_time = gDevice_LastHostTime;
+    sample_time = gDevice_LastSampleTime;
+  }
+  gDevice_LastHostTime = host_time;
+  gDevice_LastSampleTime = sample_time;
+
+  *outSampleTime = sample_time;
+  *outHostTime = host_time;
+  *outSeed = gDevice_TimelineSeed;
   pthread_mutex_unlock(&gDevice_IOMutex);
   return 0;
 }

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../src/shared_audio.h"
 
@@ -460,6 +461,44 @@ static void test_regulation_bounds_slow_writer(void)
   ASSERT_TRUE(header.inserted_frames > 0);
 }
 
+static void test_clock_publish_and_get(void)
+{
+  SharedAudio writer;
+  SharedAudio reader;
+  uint64_t host_time = 0;
+  uint64_t sample_pos = 0;
+
+  shared_audio_unlink(TEST_RING_NAME);
+  ASSERT_TRUE(shared_audio_create(&writer, TEST_RING_NAME, 48000, 2, 480) == 0);
+  ASSERT_TRUE(shared_audio_open(&reader, TEST_RING_NAME) == 0);
+
+  /* Nothing published yet. */
+  ASSERT_TRUE(shared_audio_get_clock(&reader, &host_time, &sample_pos) != 0);
+
+  shared_audio_publish_clock(&writer, 12345, 480);
+  ASSERT_TRUE(shared_audio_get_clock(&reader, &host_time, &sample_pos) == 0);
+  ASSERT_TRUE(host_time == 12345);
+  ASSERT_TRUE(sample_pos == 480);
+
+  /* The latest observation wins. */
+  shared_audio_publish_clock(&writer, 22345, 960);
+  ASSERT_TRUE(shared_audio_get_clock(&reader, &host_time, &sample_pos) == 0);
+  ASSERT_TRUE(host_time == 22345);
+  ASSERT_TRUE(sample_pos == 960);
+
+  shared_audio_close(&reader);
+  shared_audio_close(&writer);
+  shared_audio_unlink(TEST_RING_NAME);
+}
+
+static void test_host_time_advances(void)
+{
+  uint64_t before = shared_audio_host_time();
+  usleep(2000);
+  uint64_t after = shared_audio_host_time();
+  ASSERT_TRUE(after > before);
+}
+
 static void test_rejects_header_mismatch(void)
 {
   SharedAudio writer;
@@ -501,6 +540,8 @@ int main(void)
   test_regulated_read_duplicates_when_fill_low();
   test_regulation_bounds_fast_writer();
   test_regulation_bounds_slow_writer();
+  test_clock_publish_and_get();
+  test_host_time_advances();
   test_rejects_header_mismatch();
 
   puts("shared_audio tests passed");

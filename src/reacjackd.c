@@ -210,6 +210,10 @@ static int run_capture(ReacDaemon *daemon)
     if (shared_audio_write(&daemon->ring, (const float *const *)channel_ptrs,
                            REAC_FRAMES_PER_PACKET) != 0) {
       daemon->ring.header->dropped_packets++;
+    } else {
+      /* Clock observation for readers that slave to the REAC rate. */
+      shared_audio_publish_clock(&daemon->ring, shared_audio_host_time(),
+                                 daemon->ring.header->write_pos);
     }
 
     note_counter(daemon, view.counter);
@@ -257,6 +261,9 @@ static int run_tone(ReacDaemon *daemon)
       if (shared_audio_write(&daemon->ring, (const float *const *)channel_ptrs,
                              REAC_FRAMES_PER_PACKET) != 0) {
         daemon->ring.header->dropped_packets++;
+      } else {
+        shared_audio_publish_clock(&daemon->ring, shared_audio_host_time(),
+                                   daemon->ring.header->write_pos);
       }
       sent_frames += REAC_FRAMES_PER_PACKET;
       daemon->received_packets++;

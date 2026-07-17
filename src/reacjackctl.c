@@ -25,6 +25,15 @@ static void print_ring(const SharedAudio *ring)
   printf("resets: %llu\n", (unsigned long long)header->resets);
   printf("drift_inserted_frames: %llu\n", (unsigned long long)header->inserted_frames);
   printf("drift_dropped_frames: %llu\n", (unsigned long long)header->dropped_frames);
+
+  uint64_t clock_host_time = 0;
+  uint64_t clock_sample_pos = 0;
+  if (shared_audio_get_clock(ring, &clock_host_time, &clock_sample_pos) == 0) {
+    printf("clock_host_time: %llu\n", (unsigned long long)clock_host_time);
+    printf("clock_sample_pos: %llu\n", (unsigned long long)clock_sample_pos);
+  } else {
+    printf("clock: not published\n");
+  }
 }
 
 static void usage(const char *argv0)
