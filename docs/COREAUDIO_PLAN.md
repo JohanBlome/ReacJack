@@ -220,9 +220,21 @@ Tests/checks:
   daemon, missing frames, and channels beyond the ring's all become silence.
   Current limitation: the ring is only (re)opened on the first StartIO, so
   after a daemon restart, recording must be stopped and started to reattach.
+- Milestone 7's initial policy is code-complete: the shared ring gained
+  `shared_audio_seek_to_fill` (IO start latency alignment, counted as a
+  reset) and `shared_audio_read_interleaved_regulated`, which keeps the fill
+  inside a target band by dropping or duplicating at most
+  `SHARED_AUDIO_MAX_CORRECTION` frames per read, counted in
+  `dropped_frames`/`inserted_frames` (shown by `reacjackctl` and the
+  `reacjackd` status line; ring ABI bumped to 2). The HAL device hovers
+  100 ms behind the daemon with a +/- 50 ms band. Unit tests simulate ~8%
+  fast and slow writers over 20k cycles and verify the fill stays bounded
+  with zero overruns/underruns. Dropping at zero-ish crossings and the
+  drift-aware resampler remain future refinements; real drift is a few ppm,
+  far below the correction capacity.
 - Still pending manual verification under `coreaudiod` (no REAC hardware
   needed): `make install-driver`, check the device in Audio MIDI Setup,
   record silence, then run `reacjackd -tone -c 2` and confirm the tone
-  records through the device in QuickTime/Reaper.
-- Next: milestone 7 (clock drift handling) once live behavior under
-  `coreaudiod` is confirmed, and milestone 8 (packaging).
+  records through the device in QuickTime/Reaper. A multi-hour recording
+  soak should confirm drift corrections stay rare and inaudible.
+- Next: milestone 8 (packaging) and live REAC hardware validation.

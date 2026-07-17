@@ -213,6 +213,65 @@ uint32_t shared_audio_read_interleaved(SharedAudio *audio,
   return to_read;
 }
 
+uint32_t shared_audio_seek_to_fill(SharedAudio *audio, uint32_t target_fill)
+{
+  SharedAudioHeader *header = audio->header;
+  uint64_t write_pos = load_pos(&header->write_pos);
+  uint64_t fill = write_pos - load_pos(&header->read_pos);
+  uint32_t new_fill = fill < target_fill ? (uint32_t)fill : target_fill;
+
+  store_pos(&header->read_pos, write_pos - new_fill);
+  header->resets++;
+  return new_fill;
+}
+
+uint32_t shared_audio_read_interleaved_regulated(SharedAudio *audio,
+                                                 float *out,
+                                                 uint16_t out_channels,
+                                                 uint32_t frames,
+                                                 uint32_t target_fill,
+                                                 uint32_t tolerance)
+{
+  SharedAudioHeader *header = audio->header;
+  uint64_t read_pos = load_pos(&header->read_pos);
+  uint64_t fill = load_pos(&header->write_pos) - read_pos;
+
+  if (fill > (uint64_t)target_fill + tolerance) {
+    uint32_t excess = (uint32_t)(fill - target_fill);
+    uint32_t drop =
+        excess < SHARED_AUDIO_MAX_CORRECTION ? excess : SHARED_AUDIO_MAX_CORRECTION;
+    store_pos(&header->read_pos, read_pos + drop);
+    header->dropped_frames += drop;
+    return shared_audio_read_interleaved(audio, out, out_channels, frames);
+  }
+
+  if (fill + tolerance < target_fill && frames > 0) {
+    uint32_t deficit = (uint32_t)(target_fill - fill);
+    uint32_t insert =
+        deficit < SHARED_AUDIO_MAX_CORRECTION ? deficit : SHARED_AUDIO_MAX_CORRECTION;
+    if (insert > frames) {
+      insert = frames;
+    }
+
+    uint32_t real = shared_audio_read_interleaved(audio, out, out_channels,
+                                                  frames - insert);
+    float *tail = out + (size_t)(frames - insert) * out_channels;
+    if (real > 0) {
+      const float *last = out + (size_t)(real - 1) * out_channels;
+      for (uint32_t i = 0; i < insert; i++) {
+        memcpy(tail + (size_t)i * out_channels, last,
+               (size_t)out_channels * sizeof(float));
+      }
+      header->inserted_frames += insert;
+    } else {
+      memset(tail, 0, (size_t)insert * out_channels * sizeof(float));
+    }
+    return real;
+  }
+
+  return shared_audio_read_interleaved(audio, out, out_channels, frames);
+}
+
 uint32_t shared_audio_read(SharedAudio *audio, float *const *channels, uint32_t frames)
 {
   SharedAudioHeader *header = audio->header;

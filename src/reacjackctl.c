@@ -23,6 +23,8 @@ static void print_ring(const SharedAudio *ring)
   printf("overruns: %llu\n", (unsigned long long)header->overruns);
   printf("dropped_packets: %llu\n", (unsigned long long)header->dropped_packets);
   printf("resets: %llu\n", (unsigned long long)header->resets);
+  printf("drift_inserted_frames: %llu\n", (unsigned long long)header->inserted_frames);
+  printf("drift_dropped_frames: %llu\n", (unsigned long long)header->dropped_frames);
 }
 
 static void usage(const char *argv0)

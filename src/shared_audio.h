@@ -9,8 +9,11 @@ extern "C" {
 #endif
 
 #define SHARED_AUDIO_MAGIC 0x524a5341u /* "RJSA" */
-#define SHARED_AUDIO_ABI_VERSION 1u
+#define SHARED_AUDIO_ABI_VERSION 2u
 #define SHARED_AUDIO_NAME_MAX 32
+
+/* Largest drift correction (frames inserted or dropped) per regulated read. */
+#define SHARED_AUDIO_MAX_CORRECTION 8u
 
 /*
  * Single-writer/single-reader audio ring in POSIX shared memory.
@@ -34,6 +37,8 @@ typedef struct {
   uint64_t overruns;
   uint64_t dropped_packets;
   uint64_t resets;
+  uint64_t inserted_frames; /* drift corrections: duplicated frames */
+  uint64_t dropped_frames;  /* drift corrections: skipped frames */
 } SharedAudioHeader;
 
 typedef struct {
@@ -71,6 +76,24 @@ uint32_t shared_audio_read_interleaved(SharedAudio *audio,
                                        float *out,
                                        uint16_t out_channels,
                                        uint32_t frames);
+
+/* Moves read_pos so at most target_fill frames are buffered, counting a
+ * reset. Returns the resulting fill. Used to align latency at IO start. */
+uint32_t shared_audio_seek_to_fill(SharedAudio *audio, uint32_t target_fill);
+
+/* Like shared_audio_read_interleaved, but keeps the ring fill near
+ * target_fill to absorb clock drift between writer and reader: when fill
+ * exceeds target_fill + tolerance, up to SHARED_AUDIO_MAX_CORRECTION frames
+ * are dropped first (counted in dropped_frames); when fill is below
+ * target_fill - tolerance, up to SHARED_AUDIO_MAX_CORRECTION output frames
+ * are synthesized by duplicating the last real frame (counted in
+ * inserted_frames). Returns the number of real frames consumed. */
+uint32_t shared_audio_read_interleaved_regulated(SharedAudio *audio,
+                                                 float *out,
+                                                 uint16_t out_channels,
+                                                 uint32_t frames,
+                                                 uint32_t target_fill,
+                                                 uint32_t tolerance);
 
 #ifdef __cplusplus
 }

@@ -23,10 +23,12 @@
 
 #define DRIVER_BINARY "ReacJack.driver/Contents/MacOS/ReacJack"
 #define DRIVER_RING_NAME "/reacjack-audio"
+#define DRIVER_TARGET_FILL 4800
 #define EXPECTED_CHANNELS 40
 #define EXPECTED_SAMPLE_RATE 48000.0
 #define TEST_FRAMES 512
 #define RING_TEST_CHANNELS 2
+#define FEED_FRAMES (DRIVER_TARGET_FILL + TEST_FRAMES)
 
 static float ring_sample(uint16_t channel, uint32_t frame)
 {
@@ -190,22 +192,27 @@ int main(void)
 
   ASSERT_TRUE((*driver)->StopIO(driver, device, 0) == 0);
 
-  /* Milestone 6: when a reacjackd ring exists, ReadInput must deliver its
-   * audio in the first ring channels and silence in the rest. */
+  /* Milestones 6+7: when a reacjackd ring exists, ReadInput must deliver
+   * its audio in the first ring channels and silence in the rest, after
+   * StartIO aligned the ring to the target fill. */
   SharedAudio feeder;
   ASSERT_TRUE(shared_audio_create(&feeder, DRIVER_RING_NAME, 48000,
                                   RING_TEST_CHANNELS, 48000) == 0);
 
-  static float feed_ch1[TEST_FRAMES], feed_ch2[TEST_FRAMES];
+  static float feed_ch1[FEED_FRAMES], feed_ch2[FEED_FRAMES];
   float *feed_channels[RING_TEST_CHANNELS] = {feed_ch1, feed_ch2};
-  for (uint32_t i = 0; i < TEST_FRAMES; i++) {
+  for (uint32_t i = 0; i < FEED_FRAMES; i++) {
     feed_ch1[i] = ring_sample(0, i);
     feed_ch2[i] = ring_sample(1, i);
   }
   ASSERT_TRUE(shared_audio_write(&feeder, (const float *const *)feed_channels,
-                                 TEST_FRAMES) == 0);
+                                 FEED_FRAMES) == 0);
 
   ASSERT_TRUE((*driver)->StartIO(driver, device, 0) == 0);
+
+  /* StartIO seeks to the target fill, skipping the oldest frames. */
+  ASSERT_TRUE(feeder.header->resets == 1);
+  ASSERT_TRUE(shared_audio_readable_frames(&feeder) == DRIVER_TARGET_FILL);
 
   for (size_t i = 0; i < TEST_FRAMES * EXPECTED_CHANNELS; i++) {
     buffer[i] = 1.0f;
@@ -214,13 +221,28 @@ int main(void)
                                        kAudioServerPlugInIOOperationReadInput,
                                        TEST_FRAMES, &cycle, buffer, NULL) == 0);
 
+  /* Fill was exactly on target: no drift corrections, exact audio. */
+  ASSERT_TRUE(feeder.header->dropped_frames == 0);
+  ASSERT_TRUE(feeder.header->inserted_frames == 0);
   for (uint32_t frame = 0; frame < TEST_FRAMES; frame++) {
-    ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + 0] == ring_sample(0, frame));
-    ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + 1] == ring_sample(1, frame));
+    uint32_t source = TEST_FRAMES + frame; /* the seek skipped frames 0..511 */
+    ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + 0] == ring_sample(0, source));
+    ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + 1] == ring_sample(1, source));
     for (uint32_t ch = RING_TEST_CHANNELS; ch < EXPECTED_CHANNELS; ch++) {
       ASSERT_TRUE(buffer[frame * EXPECTED_CHANNELS + ch] == 0.0f);
     }
   }
+
+  /* Draining takes the fill below target: insert corrections must engage. */
+  int drain_reads = 0;
+  while (shared_audio_readable_frames(&feeder) > 0 && drain_reads < 100) {
+    ASSERT_TRUE((*driver)->DoIOOperation(driver, device, stream, 0,
+                                         kAudioServerPlugInIOOperationReadInput,
+                                         TEST_FRAMES, &cycle, buffer, NULL) == 0);
+    drain_reads++;
+  }
+  ASSERT_TRUE(drain_reads < 100);
+  ASSERT_TRUE(feeder.header->inserted_frames > 0);
 
   /* A drained ring underruns to silence instead of failing. */
   ASSERT_TRUE((*driver)->DoIOOperation(driver, device, stream, 0,

@@ -34,7 +34,11 @@ enum {
 enum {
   kDevice_ChannelCount = 40,
   kDevice_BytesPerFrame = kDevice_ChannelCount * sizeof(Float32),
-  kDevice_RingFrames = 8192 /* zero timestamp period */
+  kDevice_RingFrames = 8192, /* zero timestamp period */
+  /* Drift regulation: hover 100 ms behind the daemon, correcting only when
+   * the fill leaves a +/- 50 ms band (see shared_audio_read_interleaved_regulated). */
+  kDevice_TargetFill = 4800,
+  kDevice_FillTolerance = 2400
 };
 static const Float64 kDevice_SampleRate = 48000.0;
 
@@ -825,6 +829,9 @@ static OSStatus ReacJack_StartIO(AudioServerPlugInDriverRef inDriver,
   if (gDevice_IOIsRunning == 0) {
     gDevice_AnchorHostTime = mach_absolute_time();
     gDevice_RingIsOpen = shared_audio_open(&gDevice_Ring, kDevice_RingName) == 0;
+    if (gDevice_RingIsOpen) {
+      shared_audio_seek_to_fill(&gDevice_Ring, kDevice_TargetFill);
+    }
   }
   gDevice_IOIsRunning++;
   pthread_mutex_unlock(&gDevice_IOMutex);
@@ -937,9 +944,12 @@ static OSStatus ReacJack_DoIOOperation(AudioServerPlugInDriverRef inDriver,
       ioMainBuffer != NULL) {
     if (gDevice_RingIsOpen) {
       /* Interleaves the ring's channels into the device buffer; missing
-       * frames and channels beyond the ring's become silence. */
-      shared_audio_read_interleaved(&gDevice_Ring, (float *)ioMainBuffer,
-                                    kDevice_ChannelCount, inIOBufferFrameSize);
+       * frames and channels beyond the ring's become silence, and tiny
+       * corrections keep the fill near target despite clock drift. */
+      shared_audio_read_interleaved_regulated(&gDevice_Ring, (float *)ioMainBuffer,
+                                              kDevice_ChannelCount,
+                                              inIOBufferFrameSize, kDevice_TargetFill,
+                                              kDevice_FillTolerance);
     } else {
       memset(ioMainBuffer, 0, (size_t)inIOBufferFrameSize * kDevice_BytesPerFrame);
     }

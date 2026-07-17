@@ -85,16 +85,19 @@ static void print_status(const ReacDaemon *daemon)
   uint32_t fill = daemon->ring_created ? shared_audio_readable_frames(&daemon->ring) : 0;
   uint64_t overruns = daemon->ring_created ? daemon->ring.header->overruns : 0;
   uint64_t underruns = daemon->ring_created ? daemon->ring.header->underruns : 0;
+  uint64_t inserted = daemon->ring_created ? daemon->ring.header->inserted_frames : 0;
+  uint64_t dropped = daemon->ring_created ? daemon->ring.header->dropped_frames : 0;
 
   fprintf(stderr,
           "received=%llu lost=%llu malformed=%llu non_reac=%llu capture_errors=%llu "
-          "ring_fill=%u overruns=%llu underruns=%llu\n",
+          "ring_fill=%u overruns=%llu underruns=%llu drift_ins=%llu drift_drop=%llu\n",
           (unsigned long long)daemon->received_packets,
           (unsigned long long)daemon->lost_packets,
           (unsigned long long)daemon->malformed_packets,
           (unsigned long long)daemon->non_reac_packets,
           (unsigned long long)daemon->capture_errors, fill,
-          (unsigned long long)overruns, (unsigned long long)underruns);
+          (unsigned long long)overruns, (unsigned long long)underruns,
+          (unsigned long long)inserted, (unsigned long long)dropped);
 }
 
 static int capture_open(ReacDaemon *daemon)

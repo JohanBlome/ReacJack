@@ -277,6 +277,189 @@ static void test_interleaved_read_pads_wide_output_and_underrun(void)
   shared_audio_unlink(TEST_RING_NAME);
 }
 
+static void test_seek_to_fill(void)
+{
+  SharedAudio writer;
+  SharedAudio reader;
+  float write_ch1[100], write_ch2[100];
+  float *write_channels[2] = {write_ch1, write_ch2};
+
+  shared_audio_unlink(TEST_RING_NAME);
+  ASSERT_TRUE(shared_audio_create(&writer, TEST_RING_NAME, 48000, 2, 4800) == 0);
+  ASSERT_TRUE(shared_audio_open(&reader, TEST_RING_NAME) == 0);
+
+  for (int block = 0; block < 10; block++) {
+    fill_channels(write_channels, 2, 100, (uint32_t)block * 100);
+    ASSERT_TRUE(shared_audio_write(&writer, (const float *const *)write_channels,
+                                   100) == 0);
+  }
+
+  ASSERT_TRUE(shared_audio_seek_to_fill(&reader, 480) == 480);
+  ASSERT_TRUE(shared_audio_readable_frames(&reader) == 480);
+  ASSERT_TRUE(reader.header->resets == 1);
+
+  /* Seeking beyond what is buffered clamps to the available fill. */
+  ASSERT_TRUE(shared_audio_seek_to_fill(&reader, 2000) == 480);
+  ASSERT_TRUE(shared_audio_readable_frames(&reader) == 480);
+  ASSERT_TRUE(reader.header->resets == 2);
+
+  shared_audio_close(&reader);
+  shared_audio_close(&writer);
+  shared_audio_unlink(TEST_RING_NAME);
+}
+
+static void test_regulated_read_drops_when_fill_high(void)
+{
+  SharedAudio writer;
+  SharedAudio reader;
+  float write_ch1[100], write_ch2[100];
+  float interleaved[12 * 2];
+  float *write_channels[2] = {write_ch1, write_ch2};
+
+  shared_audio_unlink(TEST_RING_NAME);
+  ASSERT_TRUE(shared_audio_create(&writer, TEST_RING_NAME, 48000, 2, 4800) == 0);
+  ASSERT_TRUE(shared_audio_open(&reader, TEST_RING_NAME) == 0);
+
+  for (int block = 0; block < 6; block++) {
+    fill_channels(write_channels, 2, 100, (uint32_t)block * 100);
+    ASSERT_TRUE(shared_audio_write(&writer, (const float *const *)write_channels,
+                                   100) == 0);
+  }
+
+  /* Fill 600 against target 480 +/- 48: the read must first drop
+   * SHARED_AUDIO_MAX_CORRECTION frames, then deliver the next frames. */
+  ASSERT_TRUE(shared_audio_read_interleaved_regulated(&reader, interleaved, 2, 12,
+                                                      480, 48) == 12);
+  for (uint32_t frame = 0; frame < 12; frame++) {
+    uint32_t source = SHARED_AUDIO_MAX_CORRECTION + frame;
+    ASSERT_TRUE(interleaved[frame * 2 + 0] == sample_value(0, source));
+    ASSERT_TRUE(interleaved[frame * 2 + 1] == sample_value(1, source));
+  }
+  ASSERT_TRUE(reader.header->dropped_frames == SHARED_AUDIO_MAX_CORRECTION);
+  ASSERT_TRUE(shared_audio_readable_frames(&reader) ==
+              600 - SHARED_AUDIO_MAX_CORRECTION - 12);
+
+  shared_audio_close(&reader);
+  shared_audio_close(&writer);
+  shared_audio_unlink(TEST_RING_NAME);
+}
+
+static void test_regulated_read_duplicates_when_fill_low(void)
+{
+  SharedAudio writer;
+  SharedAudio reader;
+  float write_ch1[100], write_ch2[100];
+  float interleaved[50 * 2];
+  float *write_channels[2] = {write_ch1, write_ch2};
+
+  shared_audio_unlink(TEST_RING_NAME);
+  ASSERT_TRUE(shared_audio_create(&writer, TEST_RING_NAME, 48000, 2, 4800) == 0);
+  ASSERT_TRUE(shared_audio_open(&reader, TEST_RING_NAME) == 0);
+
+  fill_channels(write_channels, 2, 100, 0);
+  ASSERT_TRUE(shared_audio_write(&writer, (const float *const *)write_channels,
+                                 100) == 0);
+
+  /* Fill 100 against target 240 +/- 24: the read consumes fewer real frames
+   * and pads the tail by duplicating the last real frame. */
+  uint32_t real = 50 - SHARED_AUDIO_MAX_CORRECTION;
+  ASSERT_TRUE(shared_audio_read_interleaved_regulated(&reader, interleaved, 2, 50,
+                                                      240, 24) == real);
+  for (uint32_t frame = 0; frame < real; frame++) {
+    ASSERT_TRUE(interleaved[frame * 2 + 0] == sample_value(0, frame));
+    ASSERT_TRUE(interleaved[frame * 2 + 1] == sample_value(1, frame));
+  }
+  for (uint32_t frame = real; frame < 50; frame++) {
+    ASSERT_TRUE(interleaved[frame * 2 + 0] == sample_value(0, real - 1));
+    ASSERT_TRUE(interleaved[frame * 2 + 1] == sample_value(1, real - 1));
+  }
+  ASSERT_TRUE(reader.header->inserted_frames == SHARED_AUDIO_MAX_CORRECTION);
+  ASSERT_TRUE(shared_audio_readable_frames(&reader) == 100 - real);
+
+  shared_audio_close(&reader);
+  shared_audio_close(&writer);
+  shared_audio_unlink(TEST_RING_NAME);
+}
+
+static void run_drift_simulation(uint32_t writer_frames,
+                                 uint32_t reader_frames,
+                                 uint64_t *out_min_fill,
+                                 uint64_t *out_max_fill,
+                                 SharedAudioHeader *out_header)
+{
+  SharedAudio writer;
+  SharedAudio reader;
+  float write_ch1[16], write_ch2[16];
+  float interleaved[16 * 2];
+  float *write_channels[2] = {write_ch1, write_ch2};
+  const uint32_t target = 480;
+  const uint32_t tolerance = 48;
+
+  shared_audio_unlink(TEST_RING_NAME);
+  ASSERT_TRUE(shared_audio_create(&writer, TEST_RING_NAME, 48000, 2, 4800) == 0);
+  ASSERT_TRUE(shared_audio_open(&reader, TEST_RING_NAME) == 0);
+
+  fill_channels(write_channels, 2, 16, 0);
+  while (shared_audio_readable_frames(&reader) < target) {
+    ASSERT_TRUE(shared_audio_write(&writer, (const float *const *)write_channels,
+                                   writer_frames) == 0);
+  }
+
+  uint64_t min_fill = UINT64_MAX;
+  uint64_t max_fill = 0;
+  for (int iteration = 0; iteration < 20000; iteration++) {
+    ASSERT_TRUE(shared_audio_write(&writer, (const float *const *)write_channels,
+                                   writer_frames) == 0);
+    shared_audio_read_interleaved_regulated(&reader, interleaved, 2, reader_frames,
+                                            target, tolerance);
+    uint64_t fill = shared_audio_readable_frames(&reader);
+    if (fill < min_fill) {
+      min_fill = fill;
+    }
+    if (fill > max_fill) {
+      max_fill = fill;
+    }
+  }
+
+  *out_min_fill = min_fill;
+  *out_max_fill = max_fill;
+  *out_header = *reader.header;
+
+  shared_audio_close(&reader);
+  shared_audio_close(&writer);
+  shared_audio_unlink(TEST_RING_NAME);
+}
+
+static void test_regulation_bounds_fast_writer(void)
+{
+  uint64_t min_fill = 0;
+  uint64_t max_fill = 0;
+  SharedAudioHeader header;
+
+  /* Writer gains one frame per cycle on the reader (~8% fast). */
+  run_drift_simulation(13, 12, &min_fill, &max_fill, &header);
+
+  ASSERT_TRUE(max_fill <= 480 + 48 + 13 + SHARED_AUDIO_MAX_CORRECTION);
+  ASSERT_TRUE(header.overruns == 0);
+  ASSERT_TRUE(header.underruns == 0);
+  ASSERT_TRUE(header.dropped_frames > 0);
+}
+
+static void test_regulation_bounds_slow_writer(void)
+{
+  uint64_t min_fill = 0;
+  uint64_t max_fill = 0;
+  SharedAudioHeader header;
+
+  /* Writer loses one frame per cycle on the reader (~8% slow). */
+  run_drift_simulation(11, 12, &min_fill, &max_fill, &header);
+
+  ASSERT_TRUE(min_fill >= 480 - 48 - 12 - SHARED_AUDIO_MAX_CORRECTION);
+  ASSERT_TRUE(header.overruns == 0);
+  ASSERT_TRUE(header.underruns == 0);
+  ASSERT_TRUE(header.inserted_frames > 0);
+}
+
 static void test_rejects_header_mismatch(void)
 {
   SharedAudio writer;
@@ -313,6 +496,11 @@ int main(void)
   test_overrun_drops_whole_write();
   test_interleaved_read();
   test_interleaved_read_pads_wide_output_and_underrun();
+  test_seek_to_fill();
+  test_regulated_read_drops_when_fill_high();
+  test_regulated_read_duplicates_when_fill_low();
+  test_regulation_bounds_fast_writer();
+  test_regulation_bounds_slow_writer();
   test_rejects_header_mismatch();
 
   puts("shared_audio tests passed");
